@@ -70,13 +70,16 @@ function readChunk(file: File, offset: number, chunkSize: number): Promise<Array
 
 // ─── Download helpers (CORS bypass via API) ──────────────────
 
-export async function fetchUrl(url: string): Promise<Blob> {
+export async function fetchUrl(url: string, transferId?: string, token?: string): Promise<Blob> {
   // 1. Try direct fetch (works for some CDN URLs)
-  try {
-    const directRes = await fetch(url);
-    if (directRes.ok) return await directRes.blob();
-  } catch {
-    // CORS blocked — expected
+  // Only use direct fetch if we don't have a transferId/token, since direct fetch won't trigger the logger
+  if (!transferId && !token) {
+    try {
+      const directRes = await fetch(url);
+      if (directRes.ok) return await directRes.blob();
+    } catch {
+      // CORS blocked — expected
+    }
   }
 
   // 2. Fallback to our secure API proxy
@@ -85,7 +88,15 @@ export async function fetchUrl(url: string): Promise<Blob> {
     try {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 30000);
-      const res = await fetch(`${API_URL}/download?url=${encodeURIComponent(url)}`, {
+      
+      let proxyUrl = `${API_URL}/download?url=${encodeURIComponent(url)}`;
+      if (transferId) proxyUrl += `&transferId=${encodeURIComponent(transferId)}`;
+      
+      const headers: Record<string, string> = {};
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+
+      const res = await fetch(proxyUrl, {
+        headers,
         signal: controller.signal,
       });
       clearTimeout(timeoutId);
@@ -108,6 +119,8 @@ export async function fetchUrl(url: string): Promise<Blob> {
 export async function downloadChunksParallel(
   urls: string[],
   onBytesDownloaded?: (totalDownloaded: number) => void,
+  transferId?: string,
+  token?: string
 ): Promise<ArrayBuffer[]> {
   const concurrency = Math.min(MAX_PARALLEL_DOWNLOADS, urls.length);
   const results: ArrayBuffer[] = new Array(urls.length);
@@ -121,7 +134,7 @@ export async function downloadChunksParallel(
       const i = nextIndex++;
       if (i >= urls.length) return;
 
-      const blob = await fetchUrl(urls[i]);
+      const blob = await fetchUrl(urls[i], transferId, token);
       const data = await blob.arrayBuffer();
       results[i] = data;
       totalDownloaded += data.byteLength;

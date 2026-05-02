@@ -5,7 +5,7 @@ import { LiveStats } from '../components/LiveStats';
 
 type PageState =
   | { phase: 'upload' }
-  | { phase: 'done'; link: string; files: { name: string; size: number }[] };
+  | { phase: 'done'; link: string; files: { name: string; size: number }[]; transferId: string; adminToken?: string };
 
 export function HomePage() {
   const [state, setState] = useState<PageState>({ phase: 'upload' });
@@ -38,8 +38,8 @@ export function HomePage() {
             </p>
           </div>
           <UploadZone
-            onShareLinkGenerated={(link, files) =>
-              setState({ phase: 'done', link, files })
+            onShareLinkGenerated={(link, files, transferId, adminToken) =>
+              setState({ phase: 'done', link, files, transferId, adminToken })
             }
           />
           <LiveStats />
@@ -48,6 +48,8 @@ export function HomePage() {
         <ShareLinkCard
           link={state.link}
           files={state.files}
+          transferId={state.transferId}
+          adminToken={state.adminToken}
           onNewTransfer={() => setState({ phase: 'upload' })}
         />
       )}

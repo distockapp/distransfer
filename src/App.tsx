@@ -3,6 +3,7 @@ import { Toaster } from 'sonner';
 import { HomePage } from './pages/HomePage';
 import { DownloadPage } from './pages/DownloadPage';
 import { MyTransfersPage } from './pages/MyTransfersPage';
+import { StatsPage } from './pages/StatsPage';
 import { ArrowUpFromLine, Clock } from 'lucide-react';
 
 function HeaderNav() {
@@ -44,6 +45,7 @@ export default function App() {
           <Route path="/" element={<HomePage />} />
           <Route path="/download" element={<DownloadPage />} />
           <Route path="/transfers" element={<MyTransfersPage />} />
+          <Route path="/stats" element={<StatsPage />} />
         </Routes>
 
         <footer className="footer">

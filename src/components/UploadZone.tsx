@@ -7,7 +7,7 @@ import { addTransferRecord } from '../lib/transfer-history';
 import { toast } from 'sonner';
 
 interface Props {
-  onShareLinkGenerated: (link: string, files: { name: string; size: number }[]) => void;
+  onShareLinkGenerated: (link: string, files: { name: string; size: number }[], transferId: string, adminToken?: string) => void;
 }
 
 type Phase = 'idle' | 'uploading' | 'generating';
@@ -25,6 +25,9 @@ export function UploadZone({ onShareLinkGenerated }: Props) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const dropRef = useRef<HTMLDivElement>(null);
   const speedRef = useRef({ lastBytes: 0, lastTime: Date.now() });
+
+  const [isProtected, setIsProtected] = useState(false);
+  const [password, setPassword] = useState('');
 
   const totalSize = files.reduce((sum, f) => sum + f.size, 0);
 
@@ -140,13 +143,36 @@ export function UploadZone({ onShareLinkGenerated }: Props) {
       setPhase('generating');
       setCurrentFile('Génération du lien...');
 
-      const link = await generateShareLink(transferFiles);
+      const transferId = crypto.randomUUID();
+      const link = await generateShareLink(transferFiles, transferId);
+
+      // Create transfer in database
+      setCurrentFile('Sécurisation du transfert...');
+      let adminToken: string | undefined;
+      try {
+        const createRes = await fetch(`${import.meta.env.VITE_API_URL || 'https://distransfer-api.distockapp.workers.dev'}/transfer/create`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ transferId, password: isProtected && password ? password : null })
+        });
+        
+        if (createRes.ok) {
+          const createData = await createRes.json();
+          adminToken = createData.adminToken;
+        } else {
+          console.error('[Distransfer] API /transfer/create error:', await createRes.text());
+          toast.error('Erreur lors de la sécurisation du transfert. Le lien fonctionnera mais sans mot de passe.');
+        }
+      } catch (err) {
+        console.error('[Distransfer] API call failed:', err);
+        toast.error('Erreur réseau lors de la sécurisation. Le lien fonctionnera mais sans mot de passe.');
+      }
 
       // Save to local transfer history
       const filesMeta = files.map(f => ({ name: f.name, size: f.size }));
       addTransferRecord(filesMeta, link);
 
-      onShareLinkGenerated(link, filesMeta);
+      onShareLinkGenerated(link, filesMeta, transferId, adminToken);
       toast.success('Transfert terminé !');
     } catch (err: unknown) {
       const error = err as Error;
@@ -262,18 +288,6 @@ export function UploadZone({ onShareLinkGenerated }: Props) {
         </div>
       )}
 
-      {/* Transfer button */}
-      {files.length > 0 && !isUploading && (
-        <button
-          className="btn btn-primary btn-full btn-lg"
-          onClick={handleTransfer}
-          style={{ marginTop: 24 }}
-        >
-          <ArrowRight size={20} />
-          Transférer {files.length} fichier{files.length > 1 ? 's' : ''} ({formatSize(totalSize)})
-        </button>
-      )}
-
       {/* Add more button */}
       {files.length > 0 && !isUploading && (
         <button
@@ -283,6 +297,50 @@ export function UploadZone({ onShareLinkGenerated }: Props) {
         >
           <Plus size={16} />
           Ajouter des fichiers
+        </button>
+      )}
+
+      {/* Password Protection */}
+      {files.length > 0 && !isUploading && (
+        <div style={{ marginTop: 16, padding: '16px', background: 'var(--bg-secondary)', borderRadius: '8px' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
+            <input 
+              type="checkbox" 
+              checked={isProtected} 
+              onChange={e => setIsProtected(e.target.checked)} 
+            />
+            <span style={{ fontSize: '14px', color: 'var(--text-primary)' }}>Protéger par mot de passe</span>
+          </label>
+          {isProtected && (
+            <input
+              type="password"
+              placeholder="Saisissez un mot de passe"
+              value={password}
+              onChange={e => setPassword(e.target.value)}
+              style={{
+                marginTop: '12px',
+                width: '100%',
+                padding: '10px 12px',
+                borderRadius: '6px',
+                border: '1px solid var(--border-color)',
+                background: 'var(--bg-primary)',
+                color: 'var(--text-primary)'
+              }}
+            />
+          )}
+        </div>
+      )}
+
+      {/* Transfer button */}
+      {files.length > 0 && !isUploading && (
+        <button
+          className="btn btn-primary btn-full btn-lg"
+          onClick={handleTransfer}
+          style={{ marginTop: 24 }}
+          disabled={isProtected && password.length < 3}
+        >
+          <ArrowRight size={20} />
+          Transférer {files.length} fichier{files.length > 1 ? 's' : ''} ({formatSize(totalSize)})
         </button>
       )}
     </div>

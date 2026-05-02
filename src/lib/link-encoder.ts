@@ -17,6 +17,7 @@ export interface TransferFile {
 
 export interface TransferManifest {
   version: 1;
+  transferId: string;
   files: TransferFile[];
   totalSize: number;
   createdAt: string;
@@ -26,9 +27,10 @@ export interface TransferManifest {
  * Generate a shareable link for the given files.
  * Returns the full URL that recipients can use to download.
  */
-export async function generateShareLink(files: TransferFile[]): Promise<string> {
+export async function generateShareLink(files: TransferFile[], transferId: string): Promise<string> {
   const manifest: TransferManifest = {
     version: 1,
+    transferId,
     files,
     totalSize: files.reduce((sum, f) => sum + f.size, 0),
     createdAt: new Date().toISOString(),
