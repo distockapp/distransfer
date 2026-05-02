@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { UploadZone } from '../components/UploadZone';
 import { ShareLinkCard } from '../components/ShareLinkCard';
+import { LiveStats } from '../components/LiveStats';
 
 type PageState =
   | { phase: 'upload' }
@@ -41,6 +42,7 @@ export function HomePage() {
               setState({ phase: 'done', link, files })
             }
           />
+          <LiveStats />
         </>
       ) : (
         <ShareLinkCard

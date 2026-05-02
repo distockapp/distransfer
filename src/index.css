@@ -1161,6 +1161,141 @@ body {
   margin-bottom: 24px;
 }
 
+/* ─── Live Stats Counter ──────────────────────────────────── */
+
+.live-stats {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 14px 24px;
+  background: rgba(18, 18, 31, 0.5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  backdrop-filter: blur(12px);
+  width: 100%;
+  max-width: 580px;
+  animation: fadeInUp 0.6s ease 0.2s both;
+}
+
+.live-stats-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+}
+
+.live-stats-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: rgba(108, 92, 231, 0.1);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent-light);
+  flex-shrink: 0;
+}
+
+.live-stats-content {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.live-stats-value {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: -0.3px;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+  transition: opacity 0.15s ease;
+}
+
+.live-stats-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-weight: 400;
+  white-space: nowrap;
+}
+
+.live-stats-divider {
+  width: 1px;
+  height: 28px;
+  background: var(--border);
+  flex-shrink: 0;
+}
+
+/* Indicateur "En direct" */
+
+.live-stats-pulse {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+  padding-left: 4px;
+}
+
+.live-stats-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--success);
+  box-shadow: 0 0 6px rgba(0, 210, 160, 0.6);
+  animation: statsPulse 2s ease-in-out infinite;
+}
+
+@keyframes statsPulse {
+  0%, 100% {
+    opacity: 1;
+    box-shadow: 0 0 6px rgba(0, 210, 160, 0.6);
+  }
+  50% {
+    opacity: 0.5;
+    box-shadow: 0 0 12px rgba(0, 210, 160, 0.3);
+  }
+}
+
+.live-stats-live-text {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--success);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* Responsive — Live Stats */
+
+@media (max-width: 520px) {
+  .live-stats {
+    flex-wrap: wrap;
+    gap: 12px;
+    padding: 14px 18px;
+  }
+
+  .live-stats-item {
+    flex: 1 1 40%;
+  }
+
+  .live-stats-divider {
+    display: none;
+  }
+
+  .live-stats-pulse {
+    width: 100%;
+    justify-content: center;
+    padding-left: 0;
+    padding-top: 4px;
+    border-top: 1px solid var(--border);
+  }
+
+  .live-stats-value {
+    font-size: 14px;
+  }
+}
+
 /* ─── Footer ──────────────────────────────────────────────── */
 
 .footer {
