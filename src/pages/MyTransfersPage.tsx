@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react';
-import { Clock, Trash2, Copy, Check, ExternalLink, FileIcon, AlertTriangle, Inbox } from 'lucide-react';
+import { Clock, Trash2, Copy, Check, ExternalLink, FileIcon, AlertTriangle, Inbox, Cloud } from 'lucide-react';
 import { formatSize, getFileIcon } from '../lib/utils';
 import {
   getTransferHistory,
@@ -103,6 +103,14 @@ export function MyTransfersPage() {
 
   return (
     <div className="transfers-container">
+      {/* Storage usage badge */}
+      <div className="storage-badge">
+        <Cloud size={18} />
+        <span className="storage-badge-value">{formatSize(records.reduce((sum, r) => sum + r.totalSize, 0))}</span>
+        <span className="storage-badge-separator">/</span>
+        <span className="storage-badge-limit">∞</span>
+      </div>
+
       {/* Header */}
       <div className="transfers-header">
         <div>

@@ -804,6 +804,46 @@ body {
   width: 100%;
 }
 
+.storage-badge {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 24px;
+  background: linear-gradient(135deg, rgba(108, 92, 231, 0.08) 0%, rgba(162, 155, 254, 0.06) 100%);
+  border: 1px solid rgba(108, 92, 231, 0.2);
+  border-radius: var(--radius-lg);
+  margin-bottom: 24px;
+  width: 100%;
+  color: var(--accent-light);
+  box-shadow: 0 4px 20px rgba(108, 92, 231, 0.08);
+  animation: fadeInUp 0.3s ease;
+}
+
+.storage-badge svg {
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.storage-badge-value {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: -0.3px;
+}
+
+.storage-badge-separator {
+  font-size: 14px;
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+.storage-badge-limit {
+  font-size: 22px;
+  font-weight: 300;
+  color: var(--accent-light);
+  line-height: 1;
+}
+
 .transfers-header {
   width: 100%;
   display: flex;
