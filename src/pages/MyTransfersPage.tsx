@@ -1,5 +1,6 @@
 import { useState, useCallback } from 'react';
-import { Clock, Trash2, Copy, Check, ExternalLink, FileIcon, AlertTriangle, Inbox, Cloud } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { Clock, Trash2, Copy, Check, ExternalLink, FileIcon, AlertTriangle, Inbox, Cloud, ArrowLeft } from 'lucide-react';
 import { formatSize, getFileIcon } from '../lib/utils';
 import {
   getTransferHistory,
@@ -103,6 +104,12 @@ export function MyTransfersPage() {
 
   return (
     <div className="transfers-container">
+      {/* Back to home */}
+      <Link to="/" className="back-link">
+        <ArrowLeft size={16} />
+        Retour
+      </Link>
+
       {/* Storage usage badge */}
       <div className="storage-badge">
         <Cloud size={18} />
