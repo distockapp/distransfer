@@ -1,14 +1,14 @@
 /**
- * Distransfer — Secure Upload/Download Engine (Adaptive Throttle v3)
+ * Distransfer — Secure Upload/Download Engine (Parallel Pipeline v4)
  * 
  * All uploads go through our Cloudflare Worker API proxy.
  * Webhook URLs are NEVER present in client-side code.
  * The API handles Discord communication server-side.
  * 
  * Features:
- *   - Adaptive throttle: automatically adjusts pace to avoid Discord 429s
- *   - Dynamic concurrency: 1-2 parallel uploads, reduced on rate-limits
- *   - Smooth sustained throughput: 5-8 MB/s constant instead of 30→3 MB/s
+ *   - 5 concurrent chunk uploads across 15 webhooks (round-robin)
+ *   - Natural backpressure: 429 retries inside uploadChunk slow down
+ *     the pipeline automatically without artificial throttling
  *   - Parallel download: up to 6 concurrent chunk fetches
  */
 
@@ -18,9 +18,6 @@ import {
   MAX_PARALLEL_UPLOADS,
   MAX_PARALLEL_DOWNLOADS,
   DEFAULT_CONCURRENCY,
-  MIN_INTER_CHUNK_DELAY,
-  RATE_LIMIT_COOLDOWN,
-  THROTTLE_RELAX_AFTER,
 } from './constants';
 import { sleep } from './utils';
 
@@ -31,75 +28,6 @@ export type ProgressCallback = (uploaded: number, total: number) => void;
 export interface UploadResult {
   /** CDN attachment URLs for each chunk, in order */
   urls: string[];
-}
-
-interface ChunkUploadResult {
-  url: string;
-  wasRateLimited: boolean;
-}
-
-// ─── Adaptive Throttle State ────────────────────────────────
-
-class AdaptiveThrottle {
-  /** Current inter-chunk delay (ms) */
-  private delay: number;
-  /** Current max concurrency */
-  private concurrency: number;
-  /** Counter of consecutive chunks without a 429 */
-  private cleanStreak = 0;
-  /** Total 429s received during this upload */
-  totalRateLimits = 0;
-
-  constructor(
-    private readonly minDelay: number,
-    private readonly maxConcurrency: number,
-  ) {
-    this.delay = minDelay;
-    this.concurrency = maxConcurrency;
-  }
-
-  /** Called after each chunk completes */
-  onChunkDone(wasRateLimited: boolean): void {
-    if (wasRateLimited) {
-      this.totalRateLimits++;
-      this.cleanStreak = 0;
-
-      // Increase delay: back off progressively
-      this.delay = Math.min(this.delay + RATE_LIMIT_COOLDOWN, 8000);
-
-      // Drop concurrency to 1 to give Discord breathing room
-      this.concurrency = 1;
-
-      console.log(
-        `[Throttle] 429 detected → concurrency=1, delay=${this.delay}ms ` +
-        `(total 429s: ${this.totalRateLimits})`
-      );
-    } else {
-      this.cleanStreak++;
-
-      // Gradually reduce delay back toward minimum
-      if (this.cleanStreak >= THROTTLE_RELAX_AFTER) {
-        this.delay = Math.max(this.delay - 200, this.minDelay);
-
-        // Allow concurrency to recover (back to 2 max)
-        if (this.concurrency < this.maxConcurrency) {
-          this.concurrency = this.maxConcurrency;
-          console.log(`[Throttle] ↗ Concurrency restored to ${this.concurrency}`);
-        }
-        this.cleanStreak = 0; // reset so we don't keep relaxing
-      }
-    }
-  }
-
-  /** Current inter-chunk delay */
-  getDelay(): number {
-    return this.delay;
-  }
-
-  /** Current max concurrency */
-  getConcurrency(): number {
-    return this.concurrency;
-  }
 }
 
 // ─── Worker info cache ──────────────────────────────────────
@@ -229,12 +157,13 @@ export async function downloadChunksParallel(
  * Upload a single chunk through the API proxy.
  * The API forwards it to Discord and returns the CDN attachment URL.
  * 
- * Returns both the URL and whether the request was rate-limited,
- * so the adaptive throttle can adjust pace.
- * 
  * Handles 429 (rate limit) separately from other errors:
- * - 429: wait and retry (doesn't count toward error retries)
+ * - 429: wait the indicated time and retry (doesn't count toward error retries)
  * - Other errors: exponential backoff with limited retries
+ * 
+ * The wait times on 429 provide NATURAL backpressure on the pipeline:
+ * when Discord rate-limits, the in-flight chunk takes longer, which means
+ * fewer concurrent uploads are active → throughput self-regulates.
  */
 async function uploadChunk(
   filename: string,
@@ -242,9 +171,9 @@ async function uploadChunk(
   webhookIndex: number,
   errorRetries = 0,
   rateLimitRetries = 0,
-): Promise<ChunkUploadResult> {
+): Promise<string> {
   if (errorRetries > 8) throw new Error('Max retries exceeded.');
-  if (rateLimitRetries > 15) throw new Error('Too many rate limits. Try again later.');
+  if (rateLimitRetries > 20) throw new Error('Too many rate limits. Try again later.');
 
   const formData = new FormData();
   formData.append('file', blob, filename);
@@ -257,31 +186,28 @@ async function uploadChunk(
     });
 
     if (res.status === 429) {
-      // Rate limited — wait and retry (does NOT count as error retry)
-      let retryAfter = 5;
+      // Rate limited — wait the indicated time and retry
+      let retryAfter = 3;
       try {
         const data = await res.json() as { retryAfter?: number };
-        retryAfter = data.retryAfter || 5;
+        retryAfter = data.retryAfter || 3;
       } catch { /* ignore */ }
       
-      const waitTime = (retryAfter + rateLimitRetries * 2) * 1000;
-      console.warn(`[Distransfer] Rate limited, waiting ${(waitTime / 1000).toFixed(0)}s (attempt ${rateLimitRetries + 1})...`);
+      // Linear backoff: retryAfter + 1s per previous rate-limit on this chunk
+      const waitTime = (retryAfter + rateLimitRetries) * 1000;
+      console.warn(`[Distransfer] 429 on chunk, waiting ${(waitTime / 1000).toFixed(0)}s (rl attempt ${rateLimitRetries + 1})...`);
       await sleep(waitTime);
-      // Bubble up wasRateLimited=true from the recursive call
-      const result = await uploadChunk(filename, blob, webhookIndex, errorRetries, rateLimitRetries + 1);
-      return { url: result.url, wasRateLimited: true };
+      return uploadChunk(filename, blob, webhookIndex, errorRetries, rateLimitRetries + 1);
     }
 
     if (res.status === 502 || res.status === 503) {
-      // Worker overloaded or timed out — wait longer before retrying.
-      // Cloudflare returns 503 when the Worker exceeds its execution time limit.
-      const waitTime = (8 + errorRetries * 5) * 1000;
-      console.warn(`[Distransfer] Server overloaded (${res.status}), waiting ${(waitTime / 1000).toFixed(0)}s...`);
+      const waitTime = (5 + errorRetries * 3) * 1000;
+      console.warn(`[Distransfer] Server error (${res.status}), waiting ${(waitTime / 1000).toFixed(0)}s...`);
       await sleep(waitTime);
       return uploadChunk(filename, blob, webhookIndex, errorRetries + 1, rateLimitRetries);
     }
 
-    const data = await res.json() as { url?: string; error?: string; wasRateLimited?: boolean };
+    const data = await res.json() as { url?: string; error?: string };
 
     if (!res.ok) {
       throw new Error(data.error || `API error ${res.status}`);
@@ -291,11 +217,9 @@ async function uploadChunk(
       throw new Error('No attachment URL returned from API');
     }
 
-    // The Worker may have handled a 429 internally — check its flag too
-    return { url: data.url, wasRateLimited: data.wasRateLimited || false };
+    return data.url;
   } catch (e: unknown) {
     const err = e as Error;
-    // "Failed to fetch" = network error, CORS error, or worker crashed
     if (errorRetries < 8) {
       const waitTime = Math.pow(2, errorRetries) * 1000 + Math.random() * 2000;
       console.warn(`[Distransfer] Upload error (attempt ${errorRetries + 1}): ${err.message}, retrying in ${(waitTime / 1000).toFixed(0)}s...`);
@@ -307,17 +231,17 @@ async function uploadChunk(
 }
 
 /**
- * Upload a file by splitting into chunks with an ADAPTIVE THROTTLE pipeline.
+ * Upload a file by splitting into chunks and uploading them in parallel.
  * 
- * Instead of blasting chunks as fast as possible (which triggers Discord 429s
- * after ~200 MB and collapses throughput from 30 MB/s to <3 MB/s), this pipeline:
- * 
- *   1. Starts with conservative concurrency (2 parallel uploads)
- *   2. Inserts a minimum inter-chunk delay (300ms) to avoid flooding
- *   3. On 429: drops to 1 concurrent + increases delay by 3s
- *   4. After 8 clean chunks: gradually relaxes back toward normal pace
- * 
- * Result: sustained 5-8 MB/s from start to finish, instead of 30→3 MB/s.
+ * Uses a worker-pool pattern with N concurrent "workers", each pulling
+ * the next chunk index from a shared counter. This is simpler and faster
+ * than the previous sliding-window approach:
+ *   - No artificial delays between chunk launches
+ *   - No adaptive throttle that over-corrects and kills throughput
+ *   - Natural backpressure: when a chunk hits a 429, that worker is busy
+ *     waiting → fewer active workers → throughput self-regulates
+ *   - Each chunk round-robins to a different webhook (15 total), so
+ *     per-webhook rate limits (5msg/5s) are rarely hit
  */
 export async function uploadFile(
   file: File,
@@ -326,100 +250,63 @@ export async function uploadFile(
   const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
   const urls: string[] = new Array(totalChunks).fill('');
   let uploadedBytes = 0;
+  let rateLimitCount = 0;
 
-  // Query server for recommended concurrency
-  const serverConcurrency = await getWorkerConcurrency();
-  const maxConcurrency = Math.min(serverConcurrency, MAX_PARALLEL_UPLOADS);
-
-  // Create adaptive throttle
-  const throttle = new AdaptiveThrottle(MIN_INTER_CHUNK_DELAY, maxConcurrency);
+  const concurrency = await getWorkerConcurrency();
 
   console.log(
     `[Distransfer] Upload: ${file.name} (${(file.size / 1024 / 1024).toFixed(1)} MB, ` +
-    `${totalChunks} chunks, maxConcurrency=${maxConcurrency}, adaptive throttle enabled)`
+    `${totalChunks} chunks, concurrency=${concurrency})`
   );
 
   if (onProgress) onProgress(0, file.size);
 
-  // ─── Adaptive pipeline ──────────────────────────────────
-  const activeUploads = new Set<Promise<void>>();
+  // ─── Worker pool ────────────────────────────────────────
   let nextChunkIndex = 0;
   let hasError: Error | null = null;
 
-  const launchChunk = async (chunkIndex: number) => {
-    const offset = chunkIndex * CHUNK_SIZE;
-    const chunkLabel = `${file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}_chunk_${chunkIndex}`;
+  const uploadWorker = async (): Promise<void> => {
+    while (!hasError) {
+      const chunkIndex = nextChunkIndex++;
+      if (chunkIndex >= totalChunks) return;
 
-    // Use chunk index for webhook round-robin (across ALL 15 webhooks, not just concurrency)
-    const webhookIdx = chunkIndex;
+      const offset = chunkIndex * CHUNK_SIZE;
+      const chunkLabel = `${file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}_chunk_${chunkIndex}`;
+      const webhookIdx = chunkIndex; // round-robin across all 15 webhooks
 
-    const startTime = Date.now();
-    console.log(`[Distransfer] ⬆ Chunk ${chunkIndex}/${totalChunks - 1} → webhook[${webhookIdx % 15}]...`);
+      const startTime = Date.now();
 
-    // Read chunk from file
-    const chunkBuffer = await readChunk(file, offset, CHUNK_SIZE);
-    const chunkBlob = new Blob([chunkBuffer]);
+      try {
+        // Read chunk from file
+        const chunkBuffer = await readChunk(file, offset, CHUNK_SIZE);
+        const chunkBlob = new Blob([chunkBuffer]);
 
-    // Upload through API
-    const result = await uploadChunk(chunkLabel, chunkBlob, webhookIdx);
-    urls[chunkIndex] = result.url;
+        // Upload through API
+        const url = await uploadChunk(chunkLabel, chunkBlob, webhookIdx);
+        urls[chunkIndex] = url;
 
-    // Inform throttle about rate-limit status
-    throttle.onChunkDone(result.wasRateLimited);
+        // Track progress
+        uploadedBytes += chunkBuffer.byteLength;
+        if (onProgress) onProgress(uploadedBytes, file.size);
 
-    // Track progress
-    uploadedBytes += chunkBuffer.byteLength;
-    if (onProgress) onProgress(uploadedBytes, file.size);
-
-    const elapsed = (Date.now() - startTime) / 1000;
-    const speed = (chunkBuffer.byteLength / 1024 / 1024) / Math.max(elapsed, 0.1);
-    const rlTag = result.wasRateLimited ? ' ⚠️429' : '';
-    console.log(`[Distransfer] ✓ Chunk ${chunkIndex} done (${speed.toFixed(1)} MB/s${rlTag})`);
-  };
-
-  // Fill the pipeline with throttle-controlled launches
-  while (nextChunkIndex < totalChunks && !hasError) {
-    // Read current concurrency from throttle (may be dynamically reduced)
-    const currentConcurrency = throttle.getConcurrency();
-
-    // Fill slots up to current (possibly reduced) concurrency
-    while (activeUploads.size < currentConcurrency && nextChunkIndex < totalChunks) {
-      const i = nextChunkIndex;
-      nextChunkIndex++;
-
-      // Track the promise lifecycle
-      const tracked = launchChunk(i)
-        .catch((err) => {
-          hasError = err as Error;
-        })
-        .finally(() => {
-          activeUploads.delete(tracked);
-        });
-
-      activeUploads.add(tracked);
-
-      // Throttle-controlled inter-chunk delay
-      if (nextChunkIndex < totalChunks) {
-        const delay = throttle.getDelay();
-        await sleep(delay);
+        const elapsed = (Date.now() - startTime) / 1000;
+        const speed = (chunkBuffer.byteLength / 1024 / 1024) / Math.max(elapsed, 0.1);
+        console.log(`[Distransfer] ✓ Chunk ${chunkIndex}/${totalChunks - 1} done (${speed.toFixed(1)} MB/s, wh[${webhookIdx % 15}])`);
+      } catch (err) {
+        hasError = err as Error;
+        return;
       }
     }
+  };
 
-    // Wait for at least one slot to free up
-    if (activeUploads.size > 0) {
-      await Promise.race(activeUploads);
-    }
-
-    // Check for errors
-    if (hasError) break;
+  // Launch worker pool — all workers start immediately
+  const workers: Promise<void>[] = [];
+  for (let w = 0; w < concurrency; w++) {
+    workers.push(uploadWorker());
   }
 
-  // Wait for remaining in-flight uploads
-  if (activeUploads.size > 0) {
-    await Promise.allSettled(activeUploads);
-  }
+  await Promise.allSettled(workers);
 
-  // Re-throw if any chunk failed
   if (hasError) {
     throw hasError;
   }
@@ -429,10 +316,7 @@ export async function uploadFile(
     if (!urls[i]) throw new Error(`Upload failed: chunk ${i} has no URL`);
   }
 
-  console.log(
-    `[Distransfer] ✓ Upload complete: ${urls.length} chunks ` +
-    `(429s encountered: ${throttle.totalRateLimits})`
-  );
+  console.log(`[Distransfer] ✓ Upload complete: ${urls.length} chunks, concurrency=${concurrency}`);
   return { urls };
 }
 
@@ -441,6 +325,6 @@ export async function uploadFile(
  * Returns the CDN URL of the uploaded manifest.
  */
 export async function uploadManifest(data: Uint8Array): Promise<string> {
-  const result = await uploadChunk('manifest.bin', new Blob([data.buffer as ArrayBuffer]), 0);
-  return result.url;
+  const url = await uploadChunk('manifest.bin', new Blob([data.buffer as ArrayBuffer]), 0);
+  return url;
 }
