@@ -26,8 +26,6 @@ export function UploadZone({ onShareLinkGenerated }: Props) {
   const dropRef = useRef<HTMLDivElement>(null);
   const speedRef = useRef({ lastBytes: 0, lastTime: Date.now() });
 
-  const [isProtected, setIsProtected] = useState(false);
-  const [password, setPassword] = useState('');
 
   const totalSize = files.reduce((sum, f) => sum + f.size, 0);
 
@@ -153,7 +151,7 @@ export function UploadZone({ onShareLinkGenerated }: Props) {
         const createRes = await fetch(`${import.meta.env.VITE_API_URL || 'https://distransfer-api.distockapp.workers.dev'}/transfer/create`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ transferId, password: isProtected && password ? password : null })
+          body: JSON.stringify({ transferId, password: null })
         });
         
         if (createRes.ok) {
@@ -300,36 +298,6 @@ export function UploadZone({ onShareLinkGenerated }: Props) {
         </button>
       )}
 
-      {/* Password Protection */}
-      {files.length > 0 && !isUploading && (
-        <div style={{ marginTop: 16, padding: '16px', background: 'var(--bg-secondary)', borderRadius: '8px' }}>
-          <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
-            <input 
-              type="checkbox" 
-              checked={isProtected} 
-              onChange={e => setIsProtected(e.target.checked)} 
-            />
-            <span style={{ fontSize: '14px', color: 'var(--text-primary)' }}>Protéger par mot de passe</span>
-          </label>
-          {isProtected && (
-            <input
-              type="password"
-              placeholder="Saisissez un mot de passe"
-              value={password}
-              onChange={e => setPassword(e.target.value)}
-              style={{
-                marginTop: '12px',
-                width: '100%',
-                padding: '10px 12px',
-                borderRadius: '6px',
-                border: '1px solid var(--border-color)',
-                background: 'var(--bg-primary)',
-                color: 'var(--text-primary)'
-              }}
-            />
-          )}
-        </div>
-      )}
 
       {/* Transfer button */}
       {files.length > 0 && !isUploading && (
@@ -337,7 +305,7 @@ export function UploadZone({ onShareLinkGenerated }: Props) {
           className="btn btn-primary btn-full btn-lg"
           onClick={handleTransfer}
           style={{ marginTop: 24 }}
-          disabled={isProtected && password.length < 3}
+
         >
           <ArrowRight size={20} />
           Transférer {files.length} fichier{files.length > 1 ? 's' : ''} ({formatSize(totalSize)})
